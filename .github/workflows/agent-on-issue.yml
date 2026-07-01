@@ -1,0 +1,115 @@
+name: Agent on issue
+
+# Fires when an issue is opened. The job runs on a SELF-HOSTED runner on your
+# local machine, where the agent CLI (claude / qwen / antigravity) is installed.
+#
+# By default it only runs when the issue carries the label named in
+# AGENT_TRIGGER_LABEL (default "agent"), so casual issues don't each spin up a
+# session. Set the repo/org variable AGENT_REQUIRE_LABEL=false to run on every
+# new issue instead.
+on:
+  issues:
+    types: [opened, labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue number to run the agent against
+        required: true
+
+# One run per issue; a second event for the same issue cancels the older run.
+concurrency:
+  group: agent-issue-${{ github.event.issue.number || github.event.inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  agent:
+    runs-on: self-hosted
+    timeout-minutes: ${{ fromJSON(vars.AGENT_TIMEOUT_MINUTES || '45') }}
+
+    permissions:
+      contents: write        # push branches
+      issues: write          # comment back on the issue
+      pull-requests: write   # open the PR
+
+    steps:
+      - name: Decide whether to run
+        id: gate
+        env:
+          REQUIRE_LABEL: ${{ vars.AGENT_REQUIRE_LABEL != 'false' }}
+          TRIGGER_LABEL: ${{ vars.AGENT_TRIGGER_LABEL || 'agent' }}
+          HAS_LABEL: ${{ contains(github.event.issue.labels.*.name, vars.AGENT_TRIGGER_LABEL || 'agent') }}
+          EVENT: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Always run for manual dispatch.
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # If label gating is off, run for any newly opened issue (ignore the
+          # extra "labeled" events so we don't run twice).
+          if [ "$REQUIRE_LABEL" != "true" ]; then
+            if [ "${{ github.event.action }}" = "opened" ]; then
+              echo "run=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "run=false" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+          # Label gating on: run only when the trigger label is present.
+          if [ "$HAS_LABEL" = "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false (waiting for '$TRIGGER_LABEL' label)"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve issue details
+        if: steps.gate.outputs.run == 'true'
+        id: issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue view "$ISSUE_NUMBER" --json number,title,body,url \
+            > "$RUNNER_TEMP/issue.json"
+          echo "number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Run agent
+        if: steps.gate.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Which CLI to use: claude | qwen | antigravity. Set as a repo variable.
+          AGENT_CLI: ${{ vars.AGENT_CLI || 'claude' }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+          # Run the chosen CLI against a local model via `ollama launch`.
+          USE_OLLAMA: ${{ vars.USE_OLLAMA || 'false' }}
+          OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL || '' }}
+          OLLAMA_HOST: ${{ vars.OLLAMA_HOST || '' }}
+          ISSUE_JSON: ${{ runner.temp }}/issue.json
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+          REPO: ${{ github.repository }}
+          # Secrets for whichever agent you use (set the ones you need).
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+        shell: bash
+        run: ./scripts/run-agent.sh
+
+      - name: Open pull request
+        if: steps.gate.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: ./scripts/open-pr.sh
