@@ -28,6 +28,16 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEMPLATE="$ROOT_DIR/.github/agent/prompt-template.md"
 AGENT_TIMEOUT="${AGENT_TIMEOUT:-2400}"
 
+# A runner installed as a service (launchd/systemd) often starts with no HOME.
+# The agent CLIs (antigravity/agy, ollama) and git config need it for their
+# config dir, so derive it from the passwd entry when it's missing.
+if [ -z "${HOME:-}" ] || [ ! -d "${HOME:-}" ]; then
+  HOME="$(eval echo "~$(id -un)" 2>/dev/null || true)"
+  [ -n "$HOME" ] && [ -d "$HOME" ] || HOME="${RUNNER_TEMP:-/tmp}"
+  export HOME
+  echo "==> HOME was unset; using HOME=$HOME"
+fi
+
 : "${AGENT_CLI:?AGENT_CLI must be set (claude | qwen | antigravity)}"
 : "${ISSUE_JSON:?ISSUE_JSON must be set}"
 : "${ISSUE_NUMBER:?ISSUE_NUMBER must be set}"
