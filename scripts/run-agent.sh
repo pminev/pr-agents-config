@@ -124,14 +124,13 @@ case "$AGENT_CLI" in
     [ "$use_cloud_model" = true ] && [ -n "${AGENT_MODEL:-}" ] && cmd+=(--model "$AGENT_MODEL")
     ;;
   antigravity)
-    # Google Antigravity CLI headless mode.
-    # agy must operate on THIS checkout, not a workspace it has configured
-    # elsewhere. Set AGENT_WORKDIR_FLAG to the flag your `agy --help` uses for
-    # the project/working directory (e.g. "--workspace", "--cwd", "-C"); we pass
-    # the current checkout ($PWD) as its value. Leave empty to omit.
-    cmd=(agy --prompt "$PROMPT")
+    # Google Antigravity CLI (agy). It edits its "workspace", NOT the current
+    # directory — by default it reopens a previously-used project, so it would
+    # edit the wrong clone. --new-project starts a clean session and --add-dir
+    # scopes that workspace to THIS checkout. --dangerously-skip-permissions
+    # auto-approves tool actions for unattended (headless) runs.
+    cmd=(agy --new-project --add-dir "$PWD" --dangerously-skip-permissions --prompt "$PROMPT")
     [ -n "${AGENT_MODEL:-}" ] && cmd+=(--model "$AGENT_MODEL")
-    [ -n "${AGENT_WORKDIR_FLAG:-}" ] && cmd+=("$AGENT_WORKDIR_FLAG" "$PWD")
     ;;
   *)
     echo "ERROR: unknown AGENT_CLI '$AGENT_CLI'" >&2; exit 2 ;;
