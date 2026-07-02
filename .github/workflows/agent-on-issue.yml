@@ -135,6 +135,9 @@ jobs:
           # Which CLI to use: claude | qwen | antigravity. Set as a repo variable.
           AGENT_CLI: ${{ vars.AGENT_CLI || 'claude' }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+          # For antigravity/agy: the flag it uses to set its project directory,
+          # so it edits THIS checkout (value is passed as $PWD). e.g. "--cwd".
+          AGENT_WORKDIR_FLAG: ${{ vars.AGENT_WORKDIR_FLAG || '' }}
           # Run the chosen CLI against a local model via `ollama launch`.
           USE_OLLAMA: ${{ vars.USE_OLLAMA || 'false' }}
           OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL || '' }}
