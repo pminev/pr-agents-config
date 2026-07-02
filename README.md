@@ -34,6 +34,7 @@ The agent writes a structured summary that becomes the PR body (or a PR comment 
 | `.github/workflows/agent-on-issue.yml` | Trigger on issue opened/labeled or comment (`/agent`); run on self-hosted runner |
 | `scripts/run-agent.sh` | Tool-independent adapter — dispatches to chosen CLI, manages runner `HOME` environment fallback |
 | `scripts/open-pr.sh` | Git commit/push, opens a new PR or comments on an existing PR for follow-ups |
+| `scripts/add-runner.sh` | Set up an extra self-hosted runner (own folder + isolated `HOME`) for parallel issues |
 | `scripts/preview.sh` | Optional per-repo preview/host hook (opt-in: `chmod +x` to enable) |
 | `.github/agent/prompt-template.md` | The task prompt + required output format |
 | `AGENTS.md` / `CLAUDE.md` | Shared repo conventions every tool reads |
@@ -82,6 +83,33 @@ If `AGENT_REQUIRE_LABEL=true` (default), create a label matching
 ### 5. Copy this config into your project
 Copy `.github/`, `scripts/`, `AGENTS.md`, and `CLAUDE.md` into the target repo,
 then flesh out `AGENTS.md` and `scripts/preview.sh` for that project.
+
+### Parallel issues (N runners, N folders)
+A single runner processes one job at a time, so issues queue and run serially.
+To run several issues **in parallel**, add more runners — one per parallel slot,
+each in its own folder with its own `HOME`:
+
+```bash
+REPO=owner/name GH_PAT=ghp_xxx ./scripts/add-runner.sh 1
+REPO=owner/name GH_PAT=ghp_xxx ./scripts/add-runner.sh 2   # and so on
+```
+
+Each slot gets its own install dir, its own `_work` checkout (so branches and
+files never collide), and an isolated `HOME` written to the runner's `.env` (so
+each `agy`/`claude`/`qwen` keeps its own config/auth and they don't step on each
+other). Authenticate the CLI once per slot's `HOME`, then start each runner. The
+per-issue branch (`agent/issue-N`) and the workflow's per-issue `concurrency`
+group keep parallel runs isolated at the Git/workflow level; separate folders +
+`HOME` isolate them on disk.
+
+Two folder concepts, don't conflate them:
+- **Runner install folder** (`runner-1`, `runner-2`, …) — persistent, one per
+  parallel *slot*, not tied to any issue. It picks up whatever job comes next.
+- **Per-run working folder** (`issue_<n>`) — where each run checks out and edits.
+  The workflow checks out into a folder named for the issue (via the `ISSUE_DIR`
+  env + `actions/checkout` `path:`), so each run's workspace is clearly named
+  and isolated. These accumulate under a runner's workspace; delete old
+  `issue_*` folders periodically if disk matters.
 
 ## Try it
 1. Open an issue: *"Add a `--version` flag that prints the package version."*

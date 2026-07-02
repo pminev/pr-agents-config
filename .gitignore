@@ -1,0 +1,6 @@
+# Agent CLI local/runtime config (machine-specific, not part of the template)
+.antigravity/
+
+# Environment files with real values (commit only agent.config.example.env)
+.env
+*.local.env

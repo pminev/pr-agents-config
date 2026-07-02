@@ -30,6 +30,11 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: ${{ fromJSON(vars.AGENT_TIMEOUT_MINUTES || '45') }}
 
+    # Each run works in a folder named for the issue (e.g. issue_1), so per-issue
+    # checkouts are clearly named and isolated from one another.
+    env:
+      ISSUE_DIR: issue_${{ github.event.issue.number || github.event.inputs.issue_number }}
+
     permissions:
       contents: write        # push branches
       issues: write          # comment back on the issue
@@ -86,10 +91,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          path: ${{ env.ISSUE_DIR }}
 
       - name: Resolve issue details
         if: steps.gate.outputs.run == 'true'
         id: issue
+        working-directory: ${{ env.ISSUE_DIR }}
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
@@ -103,6 +110,7 @@ jobs:
       - name: Prepare working branch
         if: steps.gate.outputs.run == 'true'
         id: branch
+        working-directory: ${{ env.ISSUE_DIR }}
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
@@ -130,6 +138,7 @@ jobs:
 
       - name: Run agent
         if: steps.gate.outputs.run == 'true'
+        working-directory: ${{ env.ISSUE_DIR }}
         env:
           GH_TOKEN: ${{ github.token }}
           # Which CLI to use: claude | qwen | antigravity. Set as a repo variable.
@@ -155,6 +164,7 @@ jobs:
 
       - name: Open pull request
         if: steps.gate.outputs.run == 'true'
+        working-directory: ${{ env.ISSUE_DIR }}
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
