@@ -101,7 +101,7 @@ case "$AGENT_CLI" in
     ;;
   antigravity)
     # Google Antigravity CLI headless mode.
-    cmd=(agy --prompt "$PROMPT" --yes)
+    cmd=(agy --prompt "$PROMPT")
     [ -n "${AGENT_MODEL:-}" ] && cmd+=(--model "$AGENT_MODEL")
     ;;
   *)
