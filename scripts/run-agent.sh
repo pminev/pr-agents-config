@@ -69,6 +69,20 @@ issue_url="$(jq -r '.url' "$ISSUE_JSON")"
   echo "${issue_body}"
 } > "$PROMPT_FILE"
 
+# Follow-up run: prior changes are already in the working tree on this branch.
+# Append the maintainer's feedback (minus the "/agent" marker) as the new task.
+if [ "${IS_FOLLOWUP:-false}" = "true" ] && [ -n "${FEEDBACK:-}" ]; then
+  {
+    echo
+    echo "### Follow-up feedback (address this)"
+    echo "This is a follow-up run. Your earlier changes are ALREADY applied in the"
+    echo "working tree on this branch — build on them, do not start over. Apply the"
+    echo "feedback below:"
+    echo
+    echo "${FEEDBACK#/agent}"
+  } >> "$PROMPT_FILE"
+fi
+
 PROMPT="$(cat "$PROMPT_FILE")"
 
 echo "==> Running agent '$AGENT_CLI' on issue #$ISSUE_NUMBER"
