@@ -111,6 +111,47 @@ Two folder concepts, don't conflate them:
   and isolated. These accumulate under a runner's workspace; delete old
   `issue_*` folders periodically if disk matters.
 
+### Session continuity & follow-ups
+When you comment `/agent <feedback>`, the agent doesn't just re-read the branch —
+it **resumes the same CLI session**, so it keeps its earlier reasoning, not only
+the diff. Here's the flow:
+
+```
+first run                          follow-up (/agent …)
+  agent job (any runner)             route job (any runner)
+   └ claude --session-id <uuid>       └ reads newest session marker on the issue
+     agy  → capture brain/<id>/         → recovers { runner, session id, cli }
+   └ open-pr posts a marker on        agent job → runs-on [self-hosted, <that runner>]
+     the ISSUE:                        └ claude --resume <id>  /  agy --conversation <id>
+     🧠 runner=… session=… cli=…
+     <!-- agent-session … -->
+```
+
+Two mechanisms make this work:
+- **Pinning.** Sessions live in the runner's `HOME`, so a follow-up must run on
+  the *same* runner. Each runner has a unique label equal to its name
+  (`agent-runner-N`, set by `add-runner.sh`); the `route` job recovers it from
+  the marker and the `agent` job targets it via `runs-on`. Fresh runs (no
+  marker) run on any `self-hosted` runner.
+- **Session capture.** `claude` gets a generated `--session-id` we can
+  `--resume`. `agy` logs each conversation under
+  `~/.gemini/antigravity-cli/brain/<id>/`, so we read the newest dir after the
+  run and later `agy --conversation <id>`.
+
+The **session marker** is a comment on the original issue (human-readable info
+plus a hidden `<!-- agent-session … -->` line). It's also your manual handle:
+it prints the exact `claude --resume …` / `agy --conversation …` command to
+attach to that session yourself on the runner.
+
+Notes and limits:
+- **Exact resume works for `claude` and `agy`.** `qwen` has no headless resume,
+  so its follow-ups fall back to branch-diff + feedback (still fine, just no
+  conversation memory).
+- If the recovered runner is offline, the pinned follow-up **queues** until it's
+  back (it won't fall back to another runner, which wouldn't have the session).
+- Switching `AGENT_CLI` mid-issue breaks resume — the saved session belongs to
+  the original CLI.
+
 ## Try it
 1. Open an issue: *"Add a `--version` flag that prints the package version."*
 2. Add the `agent` label (or skip if label-gating is off).
