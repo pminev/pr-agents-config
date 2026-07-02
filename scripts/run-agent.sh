@@ -100,9 +100,7 @@ case "$AGENT_CLI" in
     [ "$use_cloud_model" = true ] && [ -n "${AGENT_MODEL:-}" ] && cmd+=(--model "$AGENT_MODEL")
     ;;
   antigravity)
-    # TODO: verify Antigravity's exact headless flags for your install. This
-    # assumes a --prompt non-interactive mode with auto-approval. Adjust here
-    # only — the rest of the pipeline is agnostic. (Ollama launch not supported.)
+    # Google Antigravity CLI headless mode.
     cmd=(agy --prompt "$PROMPT" --yes)
     [ -n "${AGENT_MODEL:-}" ] && cmd+=(--model "$AGENT_MODEL")
     ;;
