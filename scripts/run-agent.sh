@@ -103,7 +103,7 @@ case "$AGENT_CLI" in
     # TODO: verify Antigravity's exact headless flags for your install. This
     # assumes a --prompt non-interactive mode with auto-approval. Adjust here
     # only — the rest of the pipeline is agnostic. (Ollama launch not supported.)
-    cmd=(antigravity --prompt "$PROMPT" --yes)
+    cmd=(agy --prompt "$PROMPT" --yes)
     [ -n "${AGENT_MODEL:-}" ] && cmd+=(--model "$AGENT_MODEL")
     ;;
   *)
