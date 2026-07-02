@@ -1,12 +1,14 @@
 name: Agent on issue
 
-# Fires when an issue is opened. The job runs on a SELF-HOSTED runner on your
-# local machine, where the agent CLI (claude / qwen / antigravity) is installed.
+# Fires when an issue is opened (or a "/agent" comment is posted). Work runs on
+# a SELF-HOSTED runner where the agent CLI (claude / qwen / antigravity) lives.
 #
-# By default it only runs when the issue carries the label named in
-# AGENT_TRIGGER_LABEL (default "agent"), so casual issues don't each spin up a
-# session. Set the repo/org variable AGENT_REQUIRE_LABEL=false to run on every
-# new issue instead.
+# Two jobs:
+#   route  — runs on ANY runner; decides whether to run and, for follow-ups,
+#            looks up the pinned runner + saved session id from the issue's
+#            session marker comment.
+#   agent  — runs on the PINNED runner (so it has the saved session to resume);
+#            checks out, runs the agent, opens/updates the PR.
 on:
   issues:
     types: [opened, labeled]
@@ -20,26 +22,28 @@ on:
         description: Issue number to run the agent against
         required: true
 
-# One run per issue; a second event for the same issue cancels the older run.
+# One run per issue; a second event for the same issue queues behind the first.
 concurrency:
   group: agent-issue-${{ github.event.issue.number || github.event.inputs.issue_number }}
   cancel-in-progress: false
 
 jobs:
-  agent:
+  # ---------------------------------------------------------------------------
+  # Decide whether to run, and recover pinning/session state for follow-ups.
+  # Runs on any runner — it only calls the GitHub API.
+  # ---------------------------------------------------------------------------
+  route:
     runs-on: self-hosted
-    timeout-minutes: ${{ fromJSON(vars.AGENT_TIMEOUT_MINUTES || '45') }}
-
-    # Each run works in a folder named for the issue (e.g. issue_1), so per-issue
-    # checkouts are clearly named and isolated from one another.
-    env:
-      ISSUE_DIR: issue_${{ github.event.issue.number || github.event.inputs.issue_number }}
-
     permissions:
-      contents: write        # push branches
-      issues: write          # comment back on the issue
-      pull-requests: write   # open the PR
-
+      issues: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+      followup: ${{ steps.gate.outputs.followup }}
+      number: ${{ steps.gate.outputs.number }}
+      runner_label: ${{ steps.session.outputs.runner_label }}
+      session_id: ${{ steps.session.outputs.session_id }}
+      session_cli: ${{ steps.session.outputs.session_cli }}
     steps:
       - name: Decide whether to run
         id: gate
@@ -51,6 +55,7 @@ jobs:
           ACTION: ${{ github.event.action }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           COMMENT_AUTHOR_TYPE: ${{ github.event.comment.user.type }}
+          NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
         shell: bash
         run: |
           set -euo pipefail
@@ -60,7 +65,6 @@ jobs:
           case "$EVENT" in
             workflow_dispatch)
               run=true ;;
-
             issue_comment)
               # Only "/agent ..." comments, and never our own bot comments
               # (avoids an infinite loop from the PR-notification comment).
@@ -70,90 +74,132 @@ jobs:
                 esac
               fi
               ;;
-
             issues)
               if [ "$REQUIRE_LABEL" != "true" ]; then
-                # Label gating off: run once, on open (ignore extra label events).
                 [ "$ACTION" = "opened" ] && run=true
               else
-                # Label gating on: run only when the trigger label is present.
                 [ "$HAS_LABEL" = "true" ] && run=true
               fi
               ;;
           esac
 
-          echo "Decision: run=$run followup=$followup (event=$EVENT action=${ACTION:-})"
+          echo "Decision: run=$run followup=$followup number=$NUMBER (event=$EVENT)"
           echo "run=$run" >> "$GITHUB_OUTPUT"
           echo "followup=$followup" >> "$GITHUB_OUTPUT"
+          echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout
+      - name: Look up pinned runner + session
+        id: session
         if: steps.gate.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ steps.gate.outputs.number }}
+          IS_PR_COMMENT: ${{ github.event.issue.pull_request != null }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Session markers are posted on the ORIGINAL issue. If the comment was
+          # on a PR, map back to the original issue via the PR's head branch.
+          ORIG="$NUMBER"
+          if [ "$IS_PR_COMMENT" = "true" ]; then
+            head="$(gh pr view "$NUMBER" --json headRefName -q .headRefName 2>/dev/null || true)"
+            case "$head" in agent/issue-*) ORIG="${head#agent/issue-}" ;; esac
+          fi
+
+          # Newest marker wins: <!-- agent-session runner=X session=Y cli=Z -->
+          marker="$(gh issue view "$ORIG" --json comments \
+            -q '[.comments[].body | select(test("<!-- agent-session"))] | last // ""' 2>/dev/null || true)"
+
+          rl=""; sid=""; cli=""
+          if [ -n "$marker" ]; then
+            rl="$(printf '%s' "$marker"  | sed -n 's/.*runner=\([^ ]*\).*/\1/p')"
+            sid="$(printf '%s' "$marker" | sed -n 's/.*session=\([^ ]*\).*/\1/p')"
+            cli="$(printf '%s' "$marker" | sed -n 's/.*cli=\([^ ]*\).*/\1/p')"
+            echo "Recovered pin: runner=$rl session=$sid cli=$cli"
+          else
+            echo "No session marker found (fresh run)."
+          fi
+          echo "runner_label=$rl" >> "$GITHUB_OUTPUT"
+          echo "session_id=$sid" >> "$GITHUB_OUTPUT"
+          echo "session_cli=$cli" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # Do the work on the pinned runner (or any runner on a fresh run).
+  # ---------------------------------------------------------------------------
+  agent:
+    needs: route
+    if: needs.route.outputs.run == 'true'
+    # Pin to the origin runner when we recovered one; otherwise any self-hosted.
+    runs-on: ${{ needs.route.outputs.runner_label != '' && fromJSON(format('["self-hosted", "{0}"]', needs.route.outputs.runner_label)) || 'self-hosted' }}
+    timeout-minutes: ${{ fromJSON(vars.AGENT_TIMEOUT_MINUTES || '45') }}
+
+    # Each run works in a folder named for the issue (e.g. issue_1).
+    env:
+      ISSUE_DIR: issue_${{ needs.route.outputs.number }}
+
+    permissions:
+      contents: write        # push branches
+      issues: write          # comment back on the issue
+      pull-requests: write   # open the PR
+
+    steps:
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           path: ${{ env.ISSUE_DIR }}
 
       - name: Resolve issue details
-        if: steps.gate.outputs.run == 'true'
-        id: issue
         working-directory: ${{ env.ISSUE_DIR }}
         env:
           GH_TOKEN: ${{ github.token }}
-          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+          ISSUE_NUMBER: ${{ needs.route.outputs.number }}
         shell: bash
         run: |
           set -euo pipefail
           gh issue view "$ISSUE_NUMBER" --json number,title,body,url \
             > "$RUNNER_TEMP/issue.json"
-          echo "number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
 
       - name: Prepare working branch
-        if: steps.gate.outputs.run == 'true'
-        id: branch
         working-directory: ${{ env.ISSUE_DIR }}
         env:
           GH_TOKEN: ${{ github.token }}
-          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+          ISSUE_NUMBER: ${{ needs.route.outputs.number }}
           IS_PR_COMMENT: ${{ github.event.issue.pull_request != null }}
         shell: bash
         run: |
           set -euo pipefail
           if [ "$IS_PR_COMMENT" = "true" ]; then
-            # "/agent" comment on a PR: reuse that PR's own head branch (its
-            # number != the original issue number, so don't derive from it).
             BRANCH="$(gh pr view "$ISSUE_NUMBER" --json headRefName -q .headRefName)"
           else
             BRANCH="agent/issue-${ISSUE_NUMBER}"
           fi
           git fetch origin "$BRANCH" 2>/dev/null || true
           if git rev-parse --verify "refs/remotes/origin/$BRANCH" >/dev/null 2>&1; then
-            # Follow-up: build on top of the existing branch so prior work stays.
             git checkout -B "$BRANCH" "origin/$BRANCH"
             echo "Reusing existing branch $BRANCH"
           else
             git checkout -B "$BRANCH"
             echo "Creating new branch $BRANCH"
           fi
-          echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
 
       - name: Run agent
-        if: steps.gate.outputs.run == 'true'
         working-directory: ${{ env.ISSUE_DIR }}
         env:
           GH_TOKEN: ${{ github.token }}
-          # Which CLI to use: claude | qwen | antigravity. Set as a repo variable.
           AGENT_CLI: ${{ vars.AGENT_CLI || 'claude' }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
-          # Run the chosen CLI against a local model via `ollama launch`.
           USE_OLLAMA: ${{ vars.USE_OLLAMA || 'false' }}
           OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL || '' }}
           OLLAMA_HOST: ${{ vars.OLLAMA_HOST || '' }}
           ISSUE_JSON: ${{ runner.temp }}/issue.json
-          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+          ISSUE_NUMBER: ${{ needs.route.outputs.number }}
           REPO: ${{ github.repository }}
-          # Follow-up context: the "/agent ..." comment and whether this is one.
-          IS_FOLLOWUP: ${{ steps.gate.outputs.followup }}
+          # Follow-up context + session to resume (recovered by the route job).
+          IS_FOLLOWUP: ${{ needs.route.outputs.followup }}
           FEEDBACK: ${{ github.event.comment.body }}
+          SESSION_ID: ${{ needs.route.outputs.session_id }}
+          SESSION_CLI: ${{ needs.route.outputs.session_cli }}
           # Secrets for whichever agent you use (set the ones you need).
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -163,12 +209,12 @@ jobs:
         run: ./scripts/run-agent.sh
 
       - name: Open pull request
-        if: steps.gate.outputs.run == 'true'
         working-directory: ${{ env.ISSUE_DIR }}
         env:
           GH_TOKEN: ${{ github.token }}
-          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+          ISSUE_NUMBER: ${{ needs.route.outputs.number }}
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # RUNNER_NAME is provided automatically; used to pin future follow-ups.
         shell: bash
         run: ./scripts/open-pr.sh

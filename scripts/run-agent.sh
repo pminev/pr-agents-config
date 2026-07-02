@@ -106,6 +106,19 @@ if [ "${USE_OLLAMA:-false}" = "true" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Session continuity. On a follow-up we try to RESUME the prior conversation so
+# the agent keeps its reasoning, not just the code diff. Sessions live in the
+# runner's HOME, so this only works because follow-ups are pinned to the origin
+# runner (see the workflow's route job). We record the id/cli for open-pr.sh to
+# publish as a resume marker. Degrades gracefully: if we can't resume, we run a
+# fresh prompt on the existing branch (the code state is still there).
+#   SESSION_ID / SESSION_CLI   recovered by the route job (empty on fresh runs)
+# ---------------------------------------------------------------------------
+SESSION_STATE_FILE="$WORK/agent-session.env"
+: > "$SESSION_STATE_FILE"
+new_session_id=""
+
+# ---------------------------------------------------------------------------
 # Build the command for the configured CLI as an array. Each tool runs in its
 # non-interactive / headless mode with edits auto-accepted (there is no human in
 # the loop). Add a new tool by adding a case here — nothing else changes.
@@ -116,20 +129,38 @@ case "$AGENT_CLI" in
     # --print runs headlessly; acceptEdits applies file changes unattended.
     cmd=("${launch[@]}" claude --print --permission-mode acceptEdits)
     [ "$use_cloud_model" = true ] && [ -n "${AGENT_MODEL:-}" ] && cmd+=(--model "$AGENT_MODEL")
+    if [ "${IS_FOLLOWUP:-false}" = "true" ] && [ -n "${SESSION_ID:-}" ]; then
+      # Resume the exact prior session by id.
+      cmd+=(--resume "$SESSION_ID")
+      new_session_id="$SESSION_ID"
+    else
+      # Fresh run: pick our own session id so we can resume it later.
+      new_session_id="$(uuidgen 2>/dev/null | tr 'A-Z' 'a-z')"
+      [ -n "$new_session_id" ] && cmd+=(--session-id "$new_session_id")
+    fi
     cmd+=("$PROMPT")
     ;;
   qwen)
     # Qwen Code (Gemini-CLI fork) non-interactive mode. -y auto-approves actions.
+    # Reliable session-id resume isn't exposed headlessly, so follow-ups rely on
+    # the branch state + feedback (no resume id recorded).
     cmd=("${launch[@]}" qwen --prompt "$PROMPT" -y)
     [ "$use_cloud_model" = true ] && [ -n "${AGENT_MODEL:-}" ] && cmd+=(--model "$AGENT_MODEL")
     ;;
   antigravity)
     # Google Antigravity CLI (agy). It edits its "workspace", NOT the current
-    # directory — by default it reopens a previously-used project, so it would
-    # edit the wrong clone. --new-project starts a clean session and --add-dir
-    # scopes that workspace to THIS checkout. --dangerously-skip-permissions
-    # auto-approves tool actions for unattended (headless) runs.
-    cmd=(agy --new-project --add-dir "$PWD" --dangerously-skip-permissions --prompt "$PROMPT")
+    # directory, so --add-dir scopes the workspace to THIS checkout and
+    # --dangerously-skip-permissions auto-approves tool actions (headless).
+    # agy logs each conversation under ~/.gemini/antigravity-cli/brain/<id>/,
+    # so we capture the id after the run (below) and resume it exactly.
+    if [ "${IS_FOLLOWUP:-false}" = "true" ] && [ -n "${SESSION_ID:-}" ]; then
+      cmd=(agy --conversation "$SESSION_ID" --add-dir "$PWD" --dangerously-skip-permissions --prompt "$PROMPT")
+    elif [ "${IS_FOLLOWUP:-false}" = "true" ]; then
+      # Follow-up but no saved id: fall back to the most-recent conversation.
+      cmd=(agy --continue --add-dir "$PWD" --dangerously-skip-permissions --prompt "$PROMPT")
+    else
+      cmd=(agy --new-project --add-dir "$PWD" --dangerously-skip-permissions --prompt "$PROMPT")
+    fi
     [ -n "${AGENT_MODEL:-}" ] && cmd+=(--model "$AGENT_MODEL")
     ;;
   *)
@@ -150,6 +181,25 @@ fi
 
 echo "==> git status AFTER agent (changes must appear here to be committed):"
 git status --porcelain || true
+
+# agy only reveals its conversation id on disk: each thread is a directory named
+# by its id under the brain log folder. The newest one is the run we just did
+# (jobs are serial + pinned per runner, so this is unambiguous). Capture it so
+# follow-ups can `agy --conversation <id>` exactly.
+if [ "$AGENT_CLI" = "antigravity" ]; then
+  brain="${HOME}/.gemini/antigravity-cli/brain"
+  if [ -d "$brain" ]; then
+    latest="$(ls -td "$brain"/*/ 2>/dev/null | head -1 | xargs -r basename || true)"
+    [ -n "$latest" ] && new_session_id="$latest"
+  fi
+fi
+
+# Record session state for open-pr.sh to publish as a resume marker.
+{
+  echo "SESSION_ID=${new_session_id}"
+  echo "SESSION_CLI=${AGENT_CLI}"
+} > "$SESSION_STATE_FILE"
+echo "==> Session state: id=${new_session_id:-<none>} cli=${AGENT_CLI}"
 
 # ---------------------------------------------------------------------------
 # Optional per-repo preview/host step (e.g. start a dev server, deploy a

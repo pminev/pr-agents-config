@@ -100,3 +100,35 @@ EOF
   gh issue comment "$ISSUE_NUMBER" --body "🤖 Opened a PR with a proposed fix: ${PR_URL}"
   echo "==> PR ready: $PR_URL"
 fi
+
+# ---------------------------------------------------------------------------
+# Publish a session marker on the ORIGINAL issue. The route job reads the newest
+# such comment to (a) pin the next follow-up to this runner and (b) resume the
+# saved session. The visible part lets you enter the session manually.
+# ---------------------------------------------------------------------------
+SESSION_STATE_FILE="$WORK/agent-session.env"
+if [ -f "$SESSION_STATE_FILE" ]; then
+  # shellcheck disable=SC1090
+  . "$SESSION_STATE_FILE"   # sets SESSION_ID, SESSION_CLI
+fi
+PIN_RUNNER="${RUNNER_NAME:-unknown}"
+
+# The manual-resume command depends on the CLI.
+case "${SESSION_CLI:-}" in
+  claude)      resume_hint="\`claude --resume ${SESSION_ID}\`" ;;
+  antigravity) resume_hint="\`agy --conversation ${SESSION_ID}\`" ;;
+  qwen)        resume_hint="_not resumable headlessly for qwen — the follow-up rebuilds from the branch diff_" ;;
+  *)           resume_hint="_no session captured — the follow-up rebuilds from the branch diff_" ;;
+esac
+
+{
+  echo "🧠 **Agent session** (for manual resume / follow-ups)"
+  echo
+  echo "- runner: \`${PIN_RUNNER}\`"
+  echo "- session id: \`${SESSION_ID:-<none>}\`  (cli: \`${SESSION_CLI:-?}\`)"
+  echo "- resume manually on that machine: ${resume_hint}"
+  echo "- or just comment \`/agent <feedback>\` and it resumes automatically."
+  echo
+  echo "<!-- agent-session runner=${PIN_RUNNER} session=${SESSION_ID:-} cli=${SESSION_CLI:-} -->"
+} | gh issue comment "$ORIG_ISSUE" --body-file -
+echo "==> Session marker posted on issue #$ORIG_ISSUE (runner=$PIN_RUNNER)"

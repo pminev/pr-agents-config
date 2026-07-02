@@ -23,7 +23,10 @@ set -euo pipefail
 SLOT="${1:?usage: add-runner.sh <slot-number>}"
 
 RUNNER_VERSION="${RUNNER_VERSION:-2.319.1}"
-RUNNER_LABELS="${RUNNER_LABELS:-self-hosted,agent}"
+RUNNER_NAME="agent-runner-${SLOT}"
+# A UNIQUE label equal to the runner name lets the workflow pin a follow-up to
+# this exact runner (so it can resume a session that lives in this HOME).
+RUNNER_LABELS="${RUNNER_LABELS:-self-hosted,agent},${RUNNER_NAME}"
 BASE="${RUNNER_BASE:-$HOME/agent-runners}"
 DIR="$BASE/runner-$SLOT"
 RUNNER_HOME="$DIR/home"   # isolated HOME for this runner's agent CLIs
@@ -61,7 +64,7 @@ REG_TOKEN="$(curl -fsSL -X POST \
 ./config.sh --unattended \
   --url "https://github.com/${REPO}" \
   --token "${REG_TOKEN}" \
-  --name "agent-runner-${SLOT}" \
+  --name "${RUNNER_NAME}" \
   --labels "${RUNNER_LABELS}" \
   --work "_work" \
   --replace
