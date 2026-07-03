@@ -60,6 +60,7 @@ jobs:
           ISSUE_BODY: ${{ github.event.issue.body }}
           DEFAULT_CLI: ${{ vars.AGENT_CLI || 'claude' }}
           DEFAULT_OLLAMA: ${{ vars.USE_OLLAMA || 'false' }}
+          LABEL_ADDED: ${{ github.event.label.name }}
         shell: bash
         run: |
           set -euo pipefail
@@ -82,7 +83,11 @@ jobs:
               if [ "$REQUIRE_LABEL" != "true" ]; then
                 [ "$ACTION" = "opened" ] && run=true
               else
-                [ "$HAS_LABEL" = "true" ] && run=true
+                if [ "$ACTION" = "opened" ]; then
+                  [ "$HAS_LABEL" = "true" ] && run=true
+                elif [ "$ACTION" = "labeled" ]; then
+                  [ "$LABEL_ADDED" = "$TRIGGER_LABEL" ] && run=true
+                fi
               fi
               ;;
           esac
