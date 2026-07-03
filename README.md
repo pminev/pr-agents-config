@@ -163,7 +163,7 @@ Set the default CLI and model for all runs via GitHub repository variables (**Se
 - **`USE_OLLAMA`**: Set to `true` to run against a local model via Ollama instead of a cloud API.
 - **`OLLAMA_MODEL`**: The Ollama model to serve (e.g., `qwen2.5-coder:14b`).
 
-For a full list of configuration variables and secrets, see [agent.config.example.env](file:///root/repos/actions-runner/_work/pr-agents-config/pr-agents-config/issue_3/agent.config.example.env).
+For a full list of configuration variables and secrets, see [agent.config.example.env](agent.config.example.env).
 
 ### 2. On-the-fly Overrides in Issues and PRs
 You can override the default CLI, model, or Ollama settings for a specific run directly in the issue description or in a comment on the issue or PR.
