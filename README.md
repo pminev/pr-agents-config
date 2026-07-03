@@ -152,6 +152,52 @@ Notes and limits:
 - Switching `AGENT_CLI` mid-issue breaks resume — the saved session belongs to
   the original CLI.
 
+## CLI and Model Selection
+
+You can select the CLI and model used by the agent either globally (for all runs) or dynamically on-the-fly (for a specific issue or PR).
+
+### 1. Global Selection (Default)
+Set the default CLI and model for all runs via GitHub repository variables (**Settings → Secrets and variables → Actions**):
+- **`AGENT_CLI`**: The CLI tool to run. Supported options: `antigravity`, `claude`, or `qwen`.
+- **`AGENT_MODEL`**: The cloud model override to pass to the CLI. Leave empty to use the CLI's default model.
+- **`USE_OLLAMA`**: Set to `true` to run against a local model via Ollama instead of a cloud API.
+- **`OLLAMA_MODEL`**: The Ollama model to serve (e.g., `qwen2.5-coder:14b`).
+
+For a full list of configuration variables and secrets, see [agent.config.example.env](agent.config.example.env).
+
+### 2. On-the-fly Overrides in Issues and PRs
+You can override the default CLI, model, or Ollama settings for a specific run directly in the issue description or in a comment on the issue or PR.
+
+To do this, start the **very first line** of your issue description or comment with `/agent` followed by any of these override flags:
+- `--cli <cli_name>` — dynamically switch the CLI tool (`antigravity`, `claude`, or `qwen`).
+- `--model <model_name>` — dynamically change the model.
+- `--ollama` — dynamically switch to running against a local model via Ollama.
+
+The flags are only parsed if they appear on the very first line of the issue description or comment. Any text on subsequent lines is treated as instructions for the agent.
+
+#### Examples:
+
+- **Specify CLI and model when opening a new issue:**
+  Start the issue description with:
+  ```text
+  /agent --cli qwen --model gemini-2.5-pro
+  Please implement a custom parser for the input CSV files.
+  ```
+
+- **Specify CLI when commenting to iterate on an issue/PR:**
+  Post a comment starting with:
+  ```text
+  /agent --cli claude
+  Add unit tests for the newly added parser module.
+  ```
+
+- **Use a local Ollama model:**
+  Start the description or comment with:
+  ```text
+  /agent --cli qwen --ollama --model qwen2.5-coder:14b
+  Fix the type signature in server.py.
+  ```
+
 ## Try it
 1. Open an issue: *"Add a `--version` flag that prints the package version."*
 2. Add the `agent` label (or skip if label-gating is off).
@@ -159,7 +205,7 @@ Notes and limits:
 4. You can also run manually: **Actions → Agent on issue → Run workflow**, and
    pass an issue number.
 5. **Address feedback / iterate**: Post a comment starting with `/agent` (e.g., `/agent write tests for this too` or `/agent fix the typo in the import`) on the issue or the resulting PR. The agent will check out the existing branch, apply the feedback, and post its summary as a PR comment when finished.
-6. **Override model or CLI**: You can override the default agent model or CLI for a specific run. Simply start your issue description or comment with `/agent` followed by any of these flags: `--model <model_name>`, `--cli <cli_name>`, or `--ollama` (e.g., `/agent --cli qwen please try this instead` or `/agent --ollama --model qwen2.5-coder:14b fix this`). The flags are only parsed if they appear on the very first line starting with `/agent`, ensuring they aren't confused with flags inside your actual prompt.
+6. **Override model or CLI**: You can override the default CLI or model for a specific run directly in the issue description or in a comment. See the [CLI and Model Selection](#cli-and-model-selection) section above for details and examples.
 
 ## Security notes
 A self-hosted runner executes agent-authored code and commands from issues.
