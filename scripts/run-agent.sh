@@ -155,16 +155,26 @@ echo "==> Running agent '$AGENT_CLI' on issue #$ISSUE_NUMBER"
 # It's orthogonal to AGENT_CLI: set USE_OLLAMA=true to run whichever CLI you
 # chose against a local model. When on, the cloud --model flag is dropped (the
 # model comes from Ollama; select it via OLLAMA_MODEL).
+#
+# `ollama launch` has its own arg surface, so the invocation must be:
+#   ollama launch <tool> --model <ollama-model> -- <the tool's own flags>
+# The `--model` is REQUIRED for headless use (otherwise ollama tries to open an
+# interactive model picker), and the `--` is REQUIRED so ollama forwards the
+# tool's flags (e.g. --print) instead of parsing them itself.
 # ---------------------------------------------------------------------------
-launch=()
+launch=()          # prefix before the tool/integration name
+ollama_mid=()      # segment inserted AFTER the tool name: --model <m> --
 use_cloud_model=true
 if [ "${USE_OLLAMA:-false}" = "true" ]; then
+  if [ -z "${OLLAMA_MODEL:-}" ]; then
+    echo "ERROR: --ollama/USE_OLLAMA needs a local model; set OLLAMA_MODEL (repo var) or pass --model <name> in the /agent comment." >&2
+    exit 2
+  fi
   launch=(ollama launch)
+  ollama_mid=(--model "$OLLAMA_MODEL" --)
   use_cloud_model=false
   [ -n "${OLLAMA_HOST:-}" ] && export OLLAMA_HOST
-  # Which local model Ollama serves for the session. Exported so `ollama launch`
-  # (and the tool it wraps) can pick it up.
-  [ -n "${OLLAMA_MODEL:-}" ] && export OLLAMA_MODEL
+  export OLLAMA_MODEL
 fi
 
 # ---------------------------------------------------------------------------
@@ -189,7 +199,7 @@ cmd=()
 case "$AGENT_CLI" in
   claude)
     # --print runs headlessly; acceptEdits applies file changes unattended.
-    cmd=(${launch[@]+"${launch[@]}"} claude --print --permission-mode acceptEdits)
+    cmd=(${launch[@]+"${launch[@]}"} claude ${ollama_mid[@]+"${ollama_mid[@]}"} --print --permission-mode acceptEdits)
     [ "$use_cloud_model" = true ] && [ -n "${AGENT_MODEL:-}" ] && cmd+=(--model "$AGENT_MODEL")
     if [ "${IS_FOLLOWUP:-false}" = "true" ] && [ -n "${SESSION_ID:-}" ]; then
       # Resume the exact prior session by id.
@@ -206,7 +216,7 @@ case "$AGENT_CLI" in
     # Qwen Code (Gemini-CLI fork) non-interactive mode. -y auto-approves actions.
     # Reliable session-id resume isn't exposed headlessly, so follow-ups rely on
     # the branch state + feedback (no resume id recorded).
-    cmd=(${launch[@]+"${launch[@]}"} qwen --prompt "$PROMPT" -y)
+    cmd=(${launch[@]+"${launch[@]}"} qwen ${ollama_mid[@]+"${ollama_mid[@]}"} --prompt "$PROMPT" -y)
     [ "$use_cloud_model" = true ] && [ -n "${AGENT_MODEL:-}" ] && cmd+=(--model "$AGENT_MODEL")
     ;;
   antigravity)
