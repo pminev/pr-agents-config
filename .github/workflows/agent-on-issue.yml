@@ -44,6 +44,7 @@ jobs:
       runner_label: ${{ steps.session.outputs.runner_label }}
       session_id: ${{ steps.session.outputs.session_id }}
       session_cli: ${{ steps.session.outputs.session_cli }}
+      runs_on_labels: ${{ steps.labels.outputs.runs_on_labels }}
     steps:
       - name: Decide whether to run
         id: gate
@@ -56,6 +57,9 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
           COMMENT_AUTHOR_TYPE: ${{ github.event.comment.user.type }}
           NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          DEFAULT_CLI: ${{ vars.AGENT_CLI || 'claude' }}
+          DEFAULT_OLLAMA: ${{ vars.USE_OLLAMA || 'false' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -83,10 +87,32 @@ jobs:
               ;;
           esac
 
+          req_cli="$DEFAULT_CLI"
+          req_ollama="$DEFAULT_OLLAMA"
+
+          text=""
+          if [ "$followup" = "true" ]; then
+            text="$COMMENT_BODY"
+          elif [ "$run" = "true" ]; then
+            text="$ISSUE_BODY"
+          fi
+
+          if [[ "$text" == /agent* ]]; then
+            first_line="${text%%$'\n'*}"
+            if [[ "$first_line" =~ --cli[[:space:]=]([a-zA-Z0-9.-]+) ]]; then
+              req_cli="${BASH_REMATCH[1]}"
+            fi
+            if [[ "$first_line" =~ --ollama([[:space:]]|$) ]]; then
+              req_ollama="true"
+            fi
+          fi
+
           echo "Decision: run=$run followup=$followup number=$NUMBER (event=$EVENT)"
           echo "run=$run" >> "$GITHUB_OUTPUT"
           echo "followup=$followup" >> "$GITHUB_OUTPUT"
           echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
+          echo "req_cli=$req_cli" >> "$GITHUB_OUTPUT"
+          echo "req_ollama=$req_ollama" >> "$GITHUB_OUTPUT"
 
       - name: Look up pinned runner + session
         id: session
@@ -123,14 +149,33 @@ jobs:
           echo "session_id=$sid" >> "$GITHUB_OUTPUT"
           echo "session_cli=$cli" >> "$GITHUB_OUTPUT"
 
+      - name: Compute runner labels
+        id: labels
+        env:
+          RL: ${{ steps.session.outputs.runner_label }}
+          REQ_CLI: ${{ steps.gate.outputs.req_cli }}
+          REQ_OLLAMA: ${{ steps.gate.outputs.req_ollama }}
+        shell: bash
+        run: |
+          if [ -n "$RL" ]; then
+            echo 'runs_on_labels=["self-hosted", "'"$RL"'"]' >> "$GITHUB_OUTPUT"
+          else
+            labels='["self-hosted", "'"$REQ_CLI"'"'
+            if [ "$REQ_OLLAMA" = "true" ]; then
+              labels="$labels, \"ollama\""
+            fi
+            labels="$labels]"
+            echo "runs_on_labels=$labels" >> "$GITHUB_OUTPUT"
+          fi
+
   # ---------------------------------------------------------------------------
   # Do the work on the pinned runner (or any runner on a fresh run).
   # ---------------------------------------------------------------------------
   agent:
     needs: route
     if: needs.route.outputs.run == 'true'
-    # Pin to the origin runner when we recovered one; otherwise any self-hosted.
-    runs-on: ${{ needs.route.outputs.runner_label != '' && fromJSON(format('["self-hosted", "{0}"]', needs.route.outputs.runner_label)) || 'self-hosted' }}
+    # Pin to the origin runner when we recovered one; otherwise target the requested cli/ollama
+    runs-on: ${{ fromJSON(needs.route.outputs.runs_on_labels) }}
     timeout-minutes: ${{ fromJSON(vars.AGENT_TIMEOUT_MINUTES || '45') }}
 
     # Each run works in a folder named for the issue (e.g. issue_1).
