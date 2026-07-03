@@ -42,8 +42,10 @@ jobs:
       followup: ${{ steps.gate.outputs.followup }}
       number: ${{ steps.gate.outputs.number }}
       runner_label: ${{ steps.session.outputs.runner_label }}
-      session_id: ${{ steps.session.outputs.session_id }}
-      session_cli: ${{ steps.session.outputs.session_cli }}
+      # The cli to actually run and the session to resume are resolved by the
+      # labels step (empty session_id => start fresh rather than resume).
+      agent_cli: ${{ steps.labels.outputs.agent_cli }}
+      resume_session_id: ${{ steps.labels.outputs.resume_session_id }}
       runs_on_labels: ${{ steps.labels.outputs.runs_on_labels }}
     steps:
       - name: Decide whether to run
@@ -94,6 +96,7 @@ jobs:
 
           req_cli="$DEFAULT_CLI"
           req_ollama="$DEFAULT_OLLAMA"
+          cli_overridden=false   # was --cli explicitly requested this run?
 
           text=""
           if [ "$followup" = "true" ]; then
@@ -106,6 +109,7 @@ jobs:
             first_line="${text%%$'\n'*}"
             if [[ "$first_line" =~ --cli[[:space:]=]([a-zA-Z0-9.-]+) ]]; then
               req_cli="${BASH_REMATCH[1]}"
+              cli_overridden=true
             fi
             if [[ "$first_line" =~ --ollama([[:space:]]|$) ]]; then
               req_ollama="true"
@@ -118,6 +122,7 @@ jobs:
           echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
           echo "req_cli=$req_cli" >> "$GITHUB_OUTPUT"
           echo "req_ollama=$req_ollama" >> "$GITHUB_OUTPUT"
+          echo "cli_overridden=$cli_overridden" >> "$GITHUB_OUTPUT"
 
       - name: Look up pinned runner + session
         id: session
@@ -154,24 +159,58 @@ jobs:
           echo "session_id=$sid" >> "$GITHUB_OUTPUT"
           echo "session_cli=$cli" >> "$GITHUB_OUTPUT"
 
-      - name: Compute runner labels
+      - name: Compute runner labels + resume decision
         id: labels
         env:
+          FOLLOWUP: ${{ steps.gate.outputs.followup }}
           RL: ${{ steps.session.outputs.runner_label }}
+          SESSION_ID: ${{ steps.session.outputs.session_id }}
+          SESSION_CLI: ${{ steps.session.outputs.session_cli }}
           REQ_CLI: ${{ steps.gate.outputs.req_cli }}
           REQ_OLLAMA: ${{ steps.gate.outputs.req_ollama }}
+          CLI_OVERRIDDEN: ${{ steps.gate.outputs.cli_overridden }}
         shell: bash
         run: |
-          if [ -n "$RL" ]; then
-            echo 'runs_on_labels=["self-hosted", "'"$RL"'"]' >> "$GITHUB_OUTPUT"
-          else
-            labels='["self-hosted", "'"$REQ_CLI"'"'
-            if [ "$REQ_OLLAMA" = "true" ]; then
-              labels="$labels, \"ollama\""
+          set -euo pipefail
+
+          # Decide whether to resume the pinned session or start fresh.
+          # Resume needs: a follow-up, a recovered runner, AND no explicit switch
+          # to a different cli — you can't resume a claude session in qwen, so an
+          # explicit `--cli` change abandons the pin and starts a new session on
+          # the requested cli/host.
+          resume=false
+          agent_cli="$REQ_CLI"
+          resume_session_id=""
+          if [ "$FOLLOWUP" = "true" ] && [ -n "$RL" ]; then
+            if [ "$CLI_OVERRIDDEN" = "true" ] && [ -n "$SESSION_CLI" ] && [ "$REQ_CLI" != "$SESSION_CLI" ]; then
+              echo "Explicit cli switch ($SESSION_CLI -> $REQ_CLI): dropping pin, fresh session."
+            else
+              resume=true
+              agent_cli="${SESSION_CLI:-$REQ_CLI}"   # resume runs the session's own cli
+              resume_session_id="$SESSION_ID"
             fi
-            labels="$labels]"
-            echo "runs_on_labels=$labels" >> "$GITHUB_OUTPUT"
           fi
+
+          # A pin identifies the origin *machine* (needed to resume its saved
+          # session), but a host label alone doesn't guarantee that machine still
+          # runs the cli we need. AND the pin with the cli (capability) label so
+          # GitHub only schedules onto a runner that is BOTH the right machine
+          # AND advertises the cli — otherwise the job lands on the host and
+          # fails at runtime.
+          if [ "$resume" = "true" ]; then
+            labels='["self-hosted", "'"$RL"'", "'"$agent_cli"'"'
+          else
+            labels='["self-hosted", "'"$agent_cli"'"'
+          fi
+          if [ "$REQ_OLLAMA" = "true" ]; then
+            labels="$labels, \"ollama\""
+          fi
+          labels="$labels]"
+
+          echo "runs_on=$resume runner=$RL cli=$agent_cli session=$resume_session_id"
+          echo "runs_on_labels=$labels" >> "$GITHUB_OUTPUT"
+          echo "agent_cli=$agent_cli" >> "$GITHUB_OUTPUT"
+          echo "resume_session_id=$resume_session_id" >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------
   # Do the work on the pinned runner (or any runner on a fresh run).
@@ -237,7 +276,9 @@ jobs:
         working-directory: ${{ env.ISSUE_DIR }}
         env:
           GH_TOKEN: ${{ github.token }}
-          AGENT_CLI: ${{ vars.AGENT_CLI || 'claude' }}
+          # Resolved by route: the session's own cli on a resume, else the
+          # requested/default cli. run-agent.sh may still override via `--cli`.
+          AGENT_CLI: ${{ needs.route.outputs.agent_cli || vars.AGENT_CLI || 'claude' }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
           USE_OLLAMA: ${{ vars.USE_OLLAMA || 'false' }}
           OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL || '' }}
@@ -246,10 +287,11 @@ jobs:
           ISSUE_NUMBER: ${{ needs.route.outputs.number }}
           REPO: ${{ github.repository }}
           # Follow-up context + session to resume (recovered by the route job).
+          # resume_session_id is blank when we intentionally start fresh (e.g. a
+          # cli switch), so run-agent.sh runs a new session instead of resuming.
           IS_FOLLOWUP: ${{ needs.route.outputs.followup }}
           FEEDBACK: ${{ github.event.comment.body }}
-          SESSION_ID: ${{ needs.route.outputs.session_id }}
-          SESSION_CLI: ${{ needs.route.outputs.session_cli }}
+          SESSION_ID: ${{ needs.route.outputs.resume_session_id }}
           # Secrets for whichever agent you use (set the ones you need).
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
