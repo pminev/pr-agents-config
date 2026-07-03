@@ -1,4 +1,4 @@
-# pr-agents-config
+# cross-code-agents-action
 
 A reusable repo configuration for **agentic programming**: open a GitHub issue,
 and an AI coding agent running on your own machine implements it, pushes a
