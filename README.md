@@ -159,6 +159,7 @@ Notes and limits:
 4. You can also run manually: **Actions → Agent on issue → Run workflow**, and
    pass an issue number.
 5. **Address feedback / iterate**: Post a comment starting with `/agent` (e.g., `/agent write tests for this too` or `/agent fix the typo in the import`) on the issue or the resulting PR. The agent will check out the existing branch, apply the feedback, and post its summary as a PR comment when finished.
+6. **Override model or CLI**: You can override the default agent model or CLI for a specific run. Simply start your issue description or comment with `/agent` followed by any of these flags: `--model <model_name>`, `--cli <cli_name>`, or `--ollama` (e.g., `/agent --cli qwen please try this instead` or `/agent --ollama --model qwen2.5-coder:14b fix this`). The flags are only parsed if they appear on the very first line starting with `/agent`, ensuring they aren't confused with flags inside your actual prompt.
 
 ## Security notes
 A self-hosted runner executes agent-authored code and commands from issues.

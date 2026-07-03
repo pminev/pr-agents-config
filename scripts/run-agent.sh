@@ -56,6 +56,63 @@ issue_title="$(jq -r '.title' "$ISSUE_JSON")"
 issue_body="$(jq -r '.body // ""' "$ISSUE_JSON")"
 issue_url="$(jq -r '.url' "$ISSUE_JSON")"
 
+# ---------------------------------------------------------------------------
+# Extract optional overrides from issue body or follow-up feedback
+# ---------------------------------------------------------------------------
+override_model=""
+override_cli=""
+override_ollama=""
+
+extract_overrides() {
+  local var_name="$1"
+  local text="${!var_name}"
+  
+  if [[ "$text" == /agent* ]]; then
+    local first_line="${text%%$'\n'*}"
+    local rest="${text#*$'\n'}"
+    if [[ "$first_line" == "$text" ]]; then
+      rest=""
+    fi
+    
+    if [[ "$first_line" =~ --model[[:space:]=]([a-zA-Z0-9.:-]+) ]]; then
+      override_model="${BASH_REMATCH[1]}"
+      first_line="${first_line/--model ${override_model}/}"
+      first_line="${first_line/--model=${override_model}/}"
+    fi
+    if [[ "$first_line" =~ --cli[[:space:]=]([a-zA-Z0-9.-]+) ]]; then
+      override_cli="${BASH_REMATCH[1]}"
+      first_line="${first_line/--cli ${override_cli}/}"
+      first_line="${first_line/--cli=${override_cli}/}"
+    fi
+    if [[ "$first_line" =~ --ollama([[:space:]]|$) ]]; then
+      override_ollama="true"
+      first_line="${first_line/--ollama/}"
+    fi
+    
+    if [ -n "$rest" ]; then
+      text="${first_line}"$'\n'"${rest}"
+    else
+      text="${first_line}"
+    fi
+  fi
+  
+  printf -v "$var_name" "%s" "$text"
+}
+
+if [ "${IS_FOLLOWUP:-false}" = "true" ] && [ -n "${FEEDBACK:-}" ]; then
+  extract_overrides FEEDBACK
+else
+  extract_overrides issue_body
+fi
+
+[ -n "$override_model" ] && AGENT_MODEL="$override_model"
+[ -n "$override_cli" ] && AGENT_CLI="$override_cli"
+[ "$override_ollama" = "true" ] && USE_OLLAMA="true"
+
+if [ "${USE_OLLAMA:-false}" = "true" ]; then
+  [ -n "$override_model" ] && OLLAMA_MODEL="$override_model"
+fi
+
 {
   sed \
     -e "s#{{ISSUE_NUMBER}}#${ISSUE_NUMBER}#g" \
