@@ -45,8 +45,12 @@ fi
 # Files shared with open-pr.sh via the workspace/temp dir.
 WORK="${RUNNER_TEMP:-/tmp}"
 export AGENT_SUMMARY_FILE="$WORK/agent-summary.md"
+# One-line Conventional Commits subject the agent writes; open-pr.sh uses it for
+# the commit subject and PR title.
+export AGENT_TITLE_FILE="$WORK/agent-title.txt"
 PROMPT_FILE="$WORK/agent-prompt.md"
 : > "$AGENT_SUMMARY_FILE"
+: > "$AGENT_TITLE_FILE"
 
 # ---------------------------------------------------------------------------
 # Build the prompt: template + issue title/body, with the summary-file path
@@ -117,6 +121,7 @@ fi
   sed \
     -e "s#{{ISSUE_NUMBER}}#${ISSUE_NUMBER}#g" \
     -e "s#{{SUMMARY_FILE}}#${AGENT_SUMMARY_FILE}#g" \
+    -e "s#{{TITLE_FILE}}#${AGENT_TITLE_FILE}#g" \
     "$TEMPLATE"
   echo
   echo "## Issue #${ISSUE_NUMBER}: ${issue_title}"
@@ -184,7 +189,7 @@ cmd=()
 case "$AGENT_CLI" in
   claude)
     # --print runs headlessly; acceptEdits applies file changes unattended.
-    cmd=("${launch[@]}" claude --print --permission-mode acceptEdits)
+    cmd=(${launch[@]+"${launch[@]}"} claude --print --permission-mode acceptEdits)
     [ "$use_cloud_model" = true ] && [ -n "${AGENT_MODEL:-}" ] && cmd+=(--model "$AGENT_MODEL")
     if [ "${IS_FOLLOWUP:-false}" = "true" ] && [ -n "${SESSION_ID:-}" ]; then
       # Resume the exact prior session by id.
@@ -201,7 +206,7 @@ case "$AGENT_CLI" in
     # Qwen Code (Gemini-CLI fork) non-interactive mode. -y auto-approves actions.
     # Reliable session-id resume isn't exposed headlessly, so follow-ups rely on
     # the branch state + feedback (no resume id recorded).
-    cmd=("${launch[@]}" qwen --prompt "$PROMPT" -y)
+    cmd=(${launch[@]+"${launch[@]}"} qwen --prompt "$PROMPT" -y)
     [ "$use_cloud_model" = true ] && [ -n "${AGENT_MODEL:-}" ] && cmd+=(--model "$AGENT_MODEL")
     ;;
   antigravity)

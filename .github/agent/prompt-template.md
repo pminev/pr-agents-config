@@ -11,9 +11,28 @@ You have been assigned the GitHub issue below. Complete it end to end.
    pipeline handles all git operations. Just leave the working tree edited.
 
 ## Required output
-When you are done, write a summary to the file `{{SUMMARY_FILE}}` in GitHub
-Markdown. This text becomes the pull-request body verbatim, so write it for a
-human reviewer. Use exactly these sections:
+Produce TWO artifacts when you finish.
+
+### 1. Commit subject → `{{TITLE_FILE}}`
+Write a SINGLE line to `{{TITLE_FILE}}`: a Conventional Commits subject that
+describes the change (see https://www.conventionalcommits.org/en/v1.0.0/). It
+becomes both the commit subject and the pull-request title, so make it specific.
+
+Format: `<type>[optional scope]: <description>`
+- `type` — one of: feat, fix, docs, style, refactor, perf, test, build, ci,
+  chore, revert. Pick the one that best fits the change.
+- `scope` — optional, names the affected area, e.g. `fix(api): ...`.
+- `description` — imperative mood, lowercase start, no trailing period,
+  ≤ 72 characters. Describe WHAT the change does, not the issue number.
+- Breaking change: append `!` after the type/scope, e.g. `feat!: ...`.
+
+Examples: `fix(auth): reject expired refresh tokens`,
+`feat: add pagination to search results`, `docs: clarify runner setup`.
+
+### 2. PR body → `{{SUMMARY_FILE}}`
+Write a summary to `{{SUMMARY_FILE}}` in GitHub Markdown. This text becomes the
+pull-request body verbatim, so write it for a human reviewer. Use exactly these
+sections:
 
 ```
 ## What changed
